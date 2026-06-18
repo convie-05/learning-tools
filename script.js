@@ -1,920 +1,1075 @@
-﻿const STORAGE_KEY = 'vocab_words';
-const STATS_KEY = 'vocab_stats';
-const AI_BASE_URL_KEY = 'vocab_ai_base_url';
-const ARTICLE_WORDS_KEY = 'vocab_article_words';
-const ARTICLE_SETTINGS_KEY = 'vocab_article_settings';
-const DEFAULT_AI_BASE_URL = 'http://localhost:3000';
+const APP = {
+  STORAGE_KEY: 'vocab_words',
+  STATS_KEY: 'vocab_stats',
+  AI_BASE_URL_KEY: 'vocab_ai_base_url',
+  ARTICLE_WORDS_KEY: 'vocab_article_words',
+  ARTICLE_SETTINGS_KEY: 'vocab_article_settings',
+  PAGESIZE_KEY: 'vocab_page_size',
+  DEFAULT_AI_BASE_URL: 'http://localhost:3000',
 
-let words = [];
-let articleWords = [];
-let studyIndex = 0;
-let correctCount = 0;
-let quizCount = 0;
-let currentFilter = '';
-let currentSort = 'newest';
-let aiConfig = null;
+  words: [],
+  articleWords: [],
+  studyIndex: 0,
+  correctCount: 0,
+  quizCount: 0,
+  currentFilter: '',
+  currentSort: 'newest',
+  currentPage: 1,
+  pageSize: 20,
+  pageSizeOptions: [10, 20, 50, 100],
+  aiConfig: null,
+  aiPagination: { rawHtml: '', pages: [], currentPage: 1, totalPages: 0 },
+
+  toastTimer: null,
+};
+
+function $(id) { return document.getElementById(id); }
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+function showTip(msg, type = 'info', targetId = 'formTip') {
+  const el = $(targetId);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'form-tip ' + type;
+}
+
+function toast(msg, type = 'info') {
+  const t = $('toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.className = 'toast ' + type + ' show';
+  clearTimeout(APP.toastTimer);
+  APP.toastTimer = setTimeout(() => { t.className = 'toast'; }, 2200);
+}
+
+function normalizeWord(w) { return String(w || '').trim().toLowerCase(); }
+
+function switchSection(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  const target = $('section-' + name);
+  if (target) target.classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector('.nav-btn[data-section="' + name + '"]');
+  if (btn) btn.classList.add('active');
+  if (name === 'study') renderStudyCard();
+  if (name === 'words') renderWordList();
+  if (name === 'article') renderArticleWords();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 
 function loadWords() {
-    const storedWords = localStorage.getItem(STORAGE_KEY);
-    const storedStats = localStorage.getItem(STATS_KEY);
-    const storedAiBaseUrl = localStorage.getItem(AI_BASE_URL_KEY);
-    const storedArticleWords = localStorage.getItem(ARTICLE_WORDS_KEY);
-    const storedArticleSettings = localStorage.getItem(ARTICLE_SETTINGS_KEY);
-
-    if (storedWords) {
-        try {
-            words = JSON.parse(storedWords);
-        } catch (error) {
-            words = [];
-        }
+  try { APP.words = JSON.parse(localStorage.getItem(APP.STORAGE_KEY)) || []; } catch(e) { APP.words = []; }
+  try {
+    const s = JSON.parse(localStorage.getItem(APP.STATS_KEY));
+    APP.correctCount = Number(s.correctCount) || 0;
+    APP.quizCount = Number(s.quizCount) || 0;
+  } catch(e) { APP.correctCount = 0; APP.quizCount = 0; }
+  try { APP.articleWords = JSON.parse(localStorage.getItem(APP.ARTICLE_WORDS_KEY)) || []; } catch(e) { APP.articleWords = []; }
+  try {
+    const s = JSON.parse(localStorage.getItem(APP.ARTICLE_SETTINGS_KEY));
+    if (s) {
+      if ($('articleLevel')) $('articleLevel').value = s.level || 'easy';
+      if ($('articleLength')) $('articleLength').value = s.length || 'short';
+      if ($('articlePrompt')) $('articlePrompt').value = s.prompt || '';
     }
+  } catch(e) {}
+  const storedUrl = localStorage.getItem(APP.AI_BASE_URL_KEY) || APP.DEFAULT_AI_BASE_URL;
+  if ($('aiBaseUrl')) $('aiBaseUrl').value = storedUrl;
 
-    if (storedStats) {
-        try {
-            const stats = JSON.parse(storedStats);
-            correctCount = Number(stats.correctCount) || 0;
-            quizCount = Number(stats.quizCount) || 0;
-        } catch (error) {
-            correctCount = 0;
-            quizCount = 0;
-        }
-    }
+  APP.currentFilter = '';
+  APP.currentSort = 'newest';
+  APP.currentPage = 1;
+  APP.pageSize = 20;
+  try { localStorage.removeItem(APP.PAGESIZE_KEY); } catch(e) {}
+  if ($('searchInput')) $('searchInput').value = '';
+  if ($('sortSelect')) $('sortSelect').value = 'newest';
 
-    if (storedArticleWords) {
-        try {
-            articleWords = JSON.parse(storedArticleWords)
-                .map(item => String(item || '').trim())
-                .filter(Boolean);
-        } catch (error) {
-            articleWords = [];
-        }
-    }
-
-    if (storedArticleSettings) {
-        try {
-            const settings = JSON.parse(storedArticleSettings);
-            document.getElementById('articleLevel').value = settings.level || 'easy';
-            document.getElementById('articleLength').value = settings.length || 'short';
-            document.getElementById('articlePrompt').value = settings.prompt || '';
-        } catch (error) {
-            document.getElementById('articleLevel').value = 'easy';
-            document.getElementById('articleLength').value = 'short';
-            document.getElementById('articlePrompt').value = '';
-        }
-    }
-
-    document.getElementById('aiBaseUrl').value = storedAiBaseUrl || DEFAULT_AI_BASE_URL;
-    renderWordList();
-    renderStudyCard();
-    renderArticleWords();
-    resetAiStatus();
+  renderWordList();
+  renderStudyCard();
+  renderArticleWords();
+  resetAiStatus();
 }
 
-function saveWords() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(words));
-}
-
-function saveStats() {
-    localStorage.setItem(STATS_KEY, JSON.stringify({ correctCount, quizCount }));
-}
-
+function saveWords() { localStorage.setItem(APP.STORAGE_KEY, JSON.stringify(APP.words)); }
+function saveStats() { localStorage.setItem(APP.STATS_KEY, JSON.stringify({ correctCount: APP.correctCount, quizCount: APP.quizCount })); }
 function saveAiBaseUrl() {
-    const value = document.getElementById('aiBaseUrl').value.trim() || DEFAULT_AI_BASE_URL;
-    localStorage.setItem(AI_BASE_URL_KEY, value);
+  const v = ($('aiBaseUrl').value || APP.DEFAULT_AI_BASE_URL).trim().replace(/\/$/, '');
+  localStorage.setItem(APP.AI_BASE_URL_KEY, v);
 }
-
-function saveArticleWords() {
-    localStorage.setItem(ARTICLE_WORDS_KEY, JSON.stringify(articleWords));
-}
-
+function saveArticleWords() { localStorage.setItem(APP.ARTICLE_WORDS_KEY, JSON.stringify(APP.articleWords)); }
 function saveArticleSettings() {
-    localStorage.setItem(ARTICLE_SETTINGS_KEY, JSON.stringify({
-        level: document.getElementById('articleLevel').value,
-        length: document.getElementById('articleLength').value,
-        prompt: document.getElementById('articlePrompt').value.trim()
-    }));
-}
-
-function normalizeWord(word) {
-    return String(word || '').trim().toLowerCase();
-}
-
-function showFormTip(message, type = 'info') {
-    const tip = document.getElementById('formTip');
-    tip.textContent = message;
-    tip.className = `form-tip ${type}`;
-}
-
-function showArticleWordsTip(message, type = 'info') {
-    const tip = document.getElementById('articleWordsTip');
-    tip.textContent = message;
-    tip.className = `form-tip ${type}`;
-}
-
-function setAiStatus(status, text, hint = '') {
-    const badge = document.getElementById('aiStatusBadge');
-    const hintElement = document.getElementById('aiStatusHint');
-    badge.textContent = text;
-    badge.className = `ai-status-badge ${status}`;
-    if (hint) {
-        hintElement.textContent = hint;
-    }
-}
-
-function updateAiConfigInfo(configData) {
-    document.getElementById('aiModelInfo').textContent = configData?.model || '-';
-    document.getElementById('aiQuestionLimit').textContent = configData?.questionMaxLength ? `${configData.questionMaxLength} 字` : '-';
-    document.getElementById('aiWordLimit').textContent = configData?.maxWordList ? `${configData.maxWordList} 个` : '-';
-
-    if (configData?.rateLimit?.maxRequests && configData?.rateLimit?.windowMs) {
-        document.getElementById('aiRateLimitInfo').textContent = `${configData.rateLimit.maxRequests} 次 / ${Math.round(configData.rateLimit.windowMs / 1000)} 秒`;
-    } else {
-        document.getElementById('aiRateLimitInfo').textContent = '-';
-    }
-}
-
-function resetAiStatus() {
-    aiConfig = null;
-    updateAiConfigInfo(null);
-    setAiStatus('idle', '未检测', '点击检测后会自动读取后端配置。');
+  localStorage.setItem(APP.ARTICLE_SETTINGS_KEY, JSON.stringify({
+    level: $('articleLevel').value,
+    length: $('articleLength').value,
+    prompt: $('articlePrompt').value.trim()
+  }));
 }
 
 function addWord(e) {
-    e.preventDefault();
-    const word = document.getElementById('word').value.trim();
-    const meaning = document.getElementById('meaning').value.trim();
-    const example = document.getElementById('example').value.trim();
-
-    if (!word || !meaning) {
-        showFormTip('请先填写英文单词和中文释义。', 'error');
-        return;
-    }
-
-    const duplicated = words.find(item => normalizeWord(item.word) === normalizeWord(word));
-    if (duplicated) {
-        showFormTip(`单词“${word}”已存在，请直接编辑原条目。`, 'error');
-        openEditModal(duplicated.id);
-        return;
-    }
-
-    words.unshift({
-        id: Date.now(),
-        word,
-        meaning,
-        example,
-        addedAt: new Date().toLocaleDateString('zh-CN')
-    });
-
-    saveWords();
-    renderWordList();
-    renderStudyCard();
-    document.getElementById('wordForm').reset();
-    showFormTip(`已添加单词：${word}`, 'success');
+  e.preventDefault();
+  const word = $('word').value.trim();
+  const meaning = $('meaning').value.trim();
+  const example = $('example').value.trim();
+  if (!word || !meaning) { showTip('请先填写英文单词和中文释义。', 'error'); return; }
+  const dup = APP.words.find(i => normalizeWord(i.word) === normalizeWord(word));
+  if (dup) { showTip('单词"' + word + '"已存在！', 'error'); return; }
+  APP.words.unshift({
+    id: Date.now(), word, meaning, example,
+    addedAt: new Date().toLocaleDateString('zh-CN')
+  });
+  saveWords();
+  $('wordForm').reset();
+  showTip('已添加：' + word, 'success');
+  toast('✅ 添加成功', 'success');
+  renderWordList();
+  renderStudyCard();
 }
 
 function getFilteredWords() {
-    const keyword = currentFilter.trim().toLowerCase();
-    let result = [...words];
-
-    if (keyword) {
-        result = result.filter(item => {
-            const text = [item.word, item.meaning, item.example].filter(Boolean).join(' ').toLowerCase();
-            return text.includes(keyword);
-        });
-    }
-
-    result.sort((a, b) => {
-        if (currentSort === 'oldest') {
-            return a.id - b.id;
-        }
-        if (currentSort === 'az') {
-            return a.word.localeCompare(b.word, 'en');
-        }
-        if (currentSort === 'za') {
-            return b.word.localeCompare(a.word, 'en');
-        }
-        return b.id - a.id;
-    });
-
-    return result;
+  const kw = APP.currentFilter.trim().toLowerCase();
+  let arr = [...APP.words];
+  if (kw) arr = arr.filter(i => (i.word + ' ' + i.meaning + ' ' + (i.example || '')).toLowerCase().includes(kw));
+  if (APP.currentSort === 'oldest') arr.sort((a, b) => a.id - b.id);
+  else if (APP.currentSort === 'az') arr.sort((a, b) => a.word.localeCompare(b.word, 'en'));
+  else if (APP.currentSort === 'za') arr.sort((a, b) => b.word.localeCompare(a.word, 'en'));
+  else arr.sort((a, b) => b.id - a.id);
+  return arr;
 }
 
 function renderWordList() {
-    const list = document.getElementById('wordList');
-    const clearBtn = document.getElementById('clearBtn');
-    const filteredWords = getFilteredWords();
+  const box = $('wordList');
+  const wordCount = $('wordCount');
+  const quizCountEl = $('quizCount');
+  const correctRateEl = $('correctRate');
+  const clearBtn = $('clearBtn');
+  const list = getFilteredWords();
+  const total = list.length;
+  const ps = APP.pageSize || 20;
+  const totalPages = Math.max(1, Math.ceil(total / ps));
+  if (APP.currentPage > totalPages) APP.currentPage = totalPages;
+  if (APP.currentPage < 1) APP.currentPage = 1;
+  const start = (APP.currentPage - 1) * ps;
+  const pageItems = list.slice(start, start + ps);
 
-    document.getElementById('wordCount').textContent = words.length;
-    document.getElementById('quizCount').textContent = quizCount;
-    document.getElementById('correctRate').textContent = quizCount === 0 ? '0%' : `${Math.round((correctCount / quizCount) * 100)}%`;
-    clearBtn.style.display = words.length > 0 ? 'inline-block' : 'none';
+  wordCount.textContent = APP.words.length;
+  quizCountEl.textContent = APP.quizCount;
+  correctRateEl.textContent = APP.quizCount === 0 ? '0%' : Math.round((APP.correctCount / APP.quizCount) * 100) + '%';
+  clearBtn.style.display = APP.words.length > 0 ? 'inline-block' : 'none';
 
-    if (words.length === 0) {
-        list.innerHTML = `
-            <div class="empty-state">
-                <div>📝</div>
-                <p>暂无单词，请添加单词开始学习</p>
-            </div>
-        `;
-        return;
-    }
+  if (APP.words.length === 0) {
+    box.innerHTML = '<div class="empty-state"><div>📝</div><p>暂无单词，请去"首页"添加</p></div>';
+    renderPaginationBar(total, APP.currentPage, totalPages, true);
+    return;
+  }
+  if (list.length === 0) {
+    box.innerHTML = '<div class="empty-state compact-empty-state"><div>🔎</div><p>没有匹配的单词</p></div>';
+    renderPaginationBar(total, APP.currentPage, totalPages, true);
+    return;
+  }
+  box.innerHTML = pageItems.map(item => `
+    <div class="word-item" data-id="${item.id}">
+      <div class="word-info">
+        <div class="word">${escapeHtml(item.word)}</div>
+        <div class="meaning">${escapeHtml(item.meaning)}</div>
+        ${item.example ? '<div class="example">' + escapeHtml(item.example) + '</div>' : ''}
+        <div class="word-date">添加于 ${escapeHtml(item.addedAt || '')}</div>
+      </div>
+      <div class="word-actions">
+        <button class="action-btn edit" type="button">编辑</button>
+        <button class="action-btn delete" type="button">删除</button>
+      </div>
+    </div>
+  `).join('');
 
-    if (filteredWords.length === 0) {
-        list.innerHTML = `
-            <div class="empty-state compact-empty-state">
-                <div>🔎</div>
-                <p>没有找到匹配的单词，请尝试其他关键词。</p>
-            </div>
-        `;
-        return;
-    }
+  box.querySelectorAll('.action-btn.edit').forEach(b => {
+    b.addEventListener('click', () => {
+      const id = parseInt(b.closest('.word-item').dataset.id, 10);
+      openEditModal(id);
+    });
+  });
+  box.querySelectorAll('.action-btn.delete').forEach(b => {
+    b.addEventListener('click', () => {
+      const id = parseInt(b.closest('.word-item').dataset.id, 10);
+      deleteWord(id);
+    });
+  });
 
-    list.innerHTML = filteredWords.map(item => `
-        <div class="word-item">
-            <div class="word-info">
-                <div class="word">${escapeHtml(item.word)}</div>
-                <div class="meaning">${escapeHtml(item.meaning)}</div>
-                ${item.example ? `<div class="example">${escapeHtml(item.example)}</div>` : ''}
-                <div class="word-date">添加于 ${item.addedAt}</div>
-            </div>
-            <div class="word-actions">
-                <button class="action-btn edit" onclick="openEditModal(${item.id})">编辑</button>
-                <button class="action-btn delete" onclick="deleteWord(${item.id})">删除</button>
-            </div>
-        </div>
-    `).join('');
-}
-
-function renderArticleWords() {
-    const list = document.getElementById('articleWordList');
-
-    if (articleWords.length === 0) {
-        list.innerHTML = `
-            <div class="empty-state compact-empty-state">
-                <div>🪄</div>
-                <p>暂未添加文章专用单词</p>
-            </div>
-        `;
-        return;
-    }
-
-    list.innerHTML = articleWords.map((word, index) => `
-        <div class="article-word-item">
-            <input
-                type="text"
-                class="article-word-input"
-                value="${escapeHtml(word)}"
-                oninput="updateArticleWord(${index}, this.value)"
-                aria-label="文章单词 ${index + 1}"
-            >
-            <button class="action-btn delete" type="button" onclick="removeArticleWord(${index})">删除</button>
-        </div>
-    `).join('');
-}
-
-function escapeHtml(text) {
-    return String(text)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+  renderPaginationBar(total, APP.currentPage, totalPages, false);
 }
 
 function deleteWord(id) {
-    if (!confirm('确定要删除这个单词吗？')) {
-        return;
-    }
-
-    words = words.filter(item => item.id !== id);
-    if (studyIndex >= words.length) {
-        studyIndex = 0;
-    }
-    saveWords();
-    renderWordList();
-    renderStudyCard();
+  if (!confirm('确定删除此单词？')) return;
+  APP.words = APP.words.filter(i => i.id !== id);
+  if (APP.studyIndex >= APP.words.length) APP.studyIndex = 0;
+  const list = getFilteredWords();
+  const ps = APP.pageSize || 20;
+  const tp = Math.max(1, Math.ceil(list.length / ps));
+  if (APP.currentPage > tp) APP.currentPage = tp;
+  saveWords();
+  renderWordList();
+  renderStudyCard();
+  toast('🗑️ 已删除', 'info');
 }
 
 function clearAllWords() {
-    if (!confirm('确定要清空所有单词吗？此操作不可恢复！')) {
-        return;
-    }
-
-    words = [];
-    studyIndex = 0;
-    saveWords();
-    renderWordList();
-    renderStudyCard();
-    showFormTip('已清空全部单词。', 'info');
+  if (!confirm('确定要清空所有单词？此操作不可恢复！')) return;
+  APP.words = []; APP.studyIndex = 0; APP.currentPage = 1;
+  saveWords();
+  renderWordList();
+  renderStudyCard();
+  toast('🗑️ 已清空', 'info');
 }
 
 function openEditModal(id) {
-    const word = words.find(item => item.id === id);
-    if (!word) {
-        return;
-    }
-
-    document.getElementById('editId').value = word.id;
-    document.getElementById('editWord').value = word.word;
-    document.getElementById('editMeaning').value = word.meaning;
-    document.getElementById('editExample').value = word.example;
-    document.getElementById('editModal').style.display = 'flex';
+  const w = APP.words.find(i => i.id === id);
+  if (!w) return;
+  $('editId').value = w.id;
+  $('editWord').value = w.word;
+  $('editMeaning').value = w.meaning;
+  $('editExample').value = w.example;
+  $('editModal').style.display = 'flex';
 }
 
-function closeEditModal() {
-    document.getElementById('editModal').style.display = 'none';
-}
+function closeEditModal() { $('editModal').style.display = 'none'; }
 
 function saveEdit(e) {
-    e.preventDefault();
-    const id = parseInt(document.getElementById('editId').value, 10);
-    const word = document.getElementById('editWord').value.trim();
-    const meaning = document.getElementById('editMeaning').value.trim();
-    const example = document.getElementById('editExample').value.trim();
-
-    if (!word || !meaning) {
-        return;
-    }
-
-    const duplicated = words.find(item => item.id !== id && normalizeWord(item.word) === normalizeWord(word));
-    if (duplicated) {
-        alert(`单词“${word}”已存在，请不要重复保存。`);
-        return;
-    }
-
-    const index = words.findIndex(item => item.id === id);
-    if (index === -1) {
-        return;
-    }
-
-    words[index] = {
-        ...words[index],
-        word,
-        meaning,
-        example
-    };
-
-    saveWords();
-    renderWordList();
-    renderStudyCard();
-    closeEditModal();
-    showFormTip(`已更新单词：${word}`, 'success');
-}
-
-function addArticleWord() {
-    const input = document.getElementById('articleWordInput');
-    const word = input.value.trim();
-
-    if (!word) {
-        showArticleWordsTip('请先输入要用于生成文章的单词。', 'error');
-        return;
-    }
-
-    const duplicated = articleWords.some(item => normalizeWord(item) === normalizeWord(word));
-    if (duplicated) {
-        showArticleWordsTip(`文章词库中已存在“${word}”。`, 'error');
-        return;
-    }
-
-    articleWords.push(word);
-    saveArticleWords();
-    renderArticleWords();
-    input.value = '';
-    showArticleWordsTip(`已加入文章词库：${word}`, 'success');
-}
-
-function updateArticleWord(index, value) {
-    const trimmedValue = String(value || '').trim();
-    articleWords[index] = trimmedValue;
-    articleWords = articleWords.filter(Boolean);
-    saveArticleWords();
-    renderArticleWords();
-}
-
-function removeArticleWord(index) {
-    articleWords.splice(index, 1);
-    saveArticleWords();
-    renderArticleWords();
-    showArticleWordsTip('已从文章词库删除单词。', 'info');
-}
-
-function fillArticleWordsFromExisting() {
-    if (words.length === 0) {
-        showArticleWordsTip('当前没有现有单词可导入。', 'error');
-        return;
-    }
-
-    const mergedWords = [...articleWords];
-    words.forEach(item => {
-        if (!mergedWords.some(word => normalizeWord(word) === normalizeWord(item.word))) {
-            mergedWords.push(item.word);
-        }
-    });
-
-    articleWords = mergedWords;
-    saveArticleWords();
-    renderArticleWords();
-    showArticleWordsTip('已把现有单词复制到文章词库，原单词列表未被修改。', 'success');
-}
-
-function renderStudyCard() {
-    const studyCard = document.getElementById('studyCard');
-    const quizInput = document.getElementById('quizInput');
-    const quizResult = document.getElementById('quizResult');
-    const studyControls = document.getElementById('studyControls');
-
-    quizInput.value = '';
-    quizResult.textContent = '';
-    quizResult.className = 'quiz-result';
-
-    if (words.length === 0) {
-        studyCard.classList.remove('revealed');
-        studyCard.innerHTML = `
-            <div class="empty-state">
-                <div>🎯</div>
-                <p>添加单词后可在这里背诵和测验</p>
-            </div>
-        `;
-        studyControls.style.display = 'none';
-        return;
-    }
-
-    if (studyIndex >= words.length) {
-        studyIndex = 0;
-    }
-
-    studyControls.style.display = 'block';
-    const current = words[studyIndex];
-    studyCard.classList.remove('revealed');
-    studyCard.innerHTML = `
-        <div class="study-word">${escapeHtml(current.word)}</div>
-        <div class="study-meaning">${escapeHtml(current.meaning)}</div>
-        ${current.example ? `<div class="study-example">${escapeHtml(current.example)}</div>` : ''}
-    `;
-}
-
-function revealMeaning() {
-    document.getElementById('studyCard').classList.add('revealed');
-}
-
-function nextWord() {
-    if (words.length === 0) {
-        return;
-    }
-
-    studyIndex = (studyIndex + 1) % words.length;
-    renderStudyCard();
-}
-
-function randomWord() {
-    if (words.length === 0) {
-        return;
-    }
-
-    studyIndex = Math.floor(Math.random() * words.length);
-    renderStudyCard();
-}
-
-function normalizeMeaningText(text) {
-    return String(text || '')
-        .replace(/[，,、;；。.!！?？]/g, '/')
-        .replace(/\s+/g, '')
-        .toLowerCase();
-}
-
-function splitMeanings(text) {
-    return normalizeMeaningText(text)
-        .split('/')
-        .map(item => item.trim())
-        .filter(Boolean);
-}
-
-function checkAnswer() {
-    if (words.length === 0) {
-        return;
-    }
-
-    const input = document.getElementById('quizInput').value.trim();
-    const result = document.getElementById('quizResult');
-    const answer = words[studyIndex].meaning.trim();
-
-    if (!input) {
-        result.textContent = '请先输入中文释义';
-        result.className = 'quiz-result wrong';
-        return;
-    }
-
-    quizCount++;
-
-    const answerList = splitMeanings(answer);
-    const inputList = splitMeanings(input);
-    const isCorrect = inputList.some(userItem => answerList.some(answerItem => userItem === answerItem || answerItem.includes(userItem) || userItem.includes(answerItem)));
-
-    if (isCorrect) {
-        correctCount++;
-        result.textContent = '回答正确！';
-        result.className = 'quiz-result correct';
-    } else {
-        result.textContent = `再想想，参考答案：${answer}`;
-        result.className = 'quiz-result wrong';
-    }
-
-    saveStats();
-    revealMeaning();
-    renderWordList();
-}
-
-function exportToPDF() {
-    if (words.length === 0) {
-        alert('请先添加单词再导出');
-        return;
-    }
-
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF();
-    doc.setFont('helvetica');
-    doc.setFontSize(18);
-    doc.text('Vocabulary List', 14, 20);
-
-    const tableData = words.map((item, index) => [
-        index + 1,
-        item.word,
-        item.meaning,
-        item.example || '',
-        item.addedAt || ''
-    ]);
-
-    doc.autoTable({
-        startY: 28,
-        head: [['#', 'Word', 'Meaning', 'Example', 'Date']],
-        body: tableData,
-        styles: {
-            font: 'helvetica',
-            fontSize: 10,
-            cellPadding: 3,
-            overflow: 'linebreak'
-        },
-        headStyles: {
-            fillColor: [102, 126, 234]
-        },
-        columnStyles: {
-            0: { cellWidth: 10 },
-            1: { cellWidth: 35 },
-            2: { cellWidth: 55 },
-            3: { cellWidth: 60 },
-            4: { cellWidth: 25 }
-        }
-    });
-
-    doc.save('vocabulary-list.pdf');
+  e.preventDefault();
+  const id = parseInt($('editId').value, 10);
+  const word = $('editWord').value.trim();
+  const meaning = $('editMeaning').value.trim();
+  const example = $('editExample').value.trim();
+  if (!word || !meaning) return;
+  const dup = APP.words.find(i => i.id !== id && normalizeWord(i.word) === normalizeWord(word));
+  if (dup) { alert('单词"' + word + '"已存在'); return; }
+  const idx = APP.words.findIndex(i => i.id === id);
+  if (idx === -1) return;
+  APP.words[idx] = { ...APP.words[idx], word, meaning, example };
+  saveWords();
+  closeEditModal();
+  renderWordList();
+  renderStudyCard();
+  toast('💾 已保存', 'success');
 }
 
 function exportToJSON() {
+  if (APP.words.length === 0) { alert('请先添加单词'); return; }
+  const blob = new Blob([JSON.stringify(APP.words, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'vocabulary-list.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('📤 已导出JSON', 'success');
+}
+
+function handleImportClick() { $('importFile').click(); }
+
+function importFromJSON(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function() {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!Array.isArray(data)) throw new Error('JSON 格式不正确');
+      const sanitized = data
+        .filter(i => i && typeof i === 'object')
+        .map((i, idx) => ({
+          id: Date.now() + idx,
+          word: String(i.word || '').trim(),
+          meaning: String(i.meaning || '').trim(),
+          example: String(i.example || '').trim(),
+          addedAt: i.addedAt || new Date().toLocaleDateString('zh-CN')
+        }))
+        .filter(i => i.word && i.meaning);
+      if (sanitized.length === 0) throw new Error('没有可导入的单词');
+      const map = new Map(APP.words.map(i => [normalizeWord(i.word), i]));
+      sanitized.forEach(i => map.set(normalizeWord(i.word), { ...i, id: map.get(normalizeWord(i.word))?.id || i.id }));
+      APP.words = Array.from(map.values()).sort((a, b) => b.id - a.id);
+      saveWords();
+      renderWordList();
+      renderStudyCard();
+      toast('📥 导入成功 ' + sanitized.length + ' 个单词', 'success');
+    } catch (err) { alert('导入失败：' + err.message); }
+    finally { e.target.value = ''; }
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
+function exportToPDF() {
+  if (APP.words.length === 0) { alert('请先添加单词'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFont('helvetica');
+  doc.setFontSize(16);
+  doc.text('Vocabulary List', 14, 18);
+  const rows = APP.words.map((w, i) => [
+    i + 1, w.word, w.meaning, w.example || '', w.addedAt || ''
+  ]);
+  doc.autoTable({
+    startY: 24,
+    head: [['#', 'Word', 'Meaning', 'Example', 'Date']],
+    body: rows,
+    styles: { font: 'helvetica', fontSize: 10, cellPadding: 3, overflow: 'linebreak' },
+    headStyles: { fillColor: [102, 126, 234] },
+    columnStyles: {
+      0: { cellWidth: 10 }, 1: { cellWidth: 35 }, 2: { cellWidth: 55 },
+      3: { cellWidth: 60 }, 4: { cellWidth: 25 }
+    }
+  });
+  doc.save('vocabulary-list.pdf');
+  toast('📄 已导出PDF', 'success');
+}
+
+function parsePDFFile() {
+  if (typeof pdfjsLib === 'undefined') {
+    alert('PDF库未加载'); return;
+  }
+  $('pdfFileInput').click();
+}
+
+async function handlePDFFile(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  toast('📄 正在解析PDF...', 'info');
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let text = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const tc = await page.getTextContent();
+      text += tc.items.map(it => it.str).join(' ') + '\n';
+    }
+    const words = extractWordsFromText(text);
     if (words.length === 0) {
-        alert('请先添加单词再导出');
-        return;
+      toast('⚠️ 未从PDF中识别到单词对', 'error');
+      return;
     }
-
-    const blob = new Blob([JSON.stringify(words, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'vocabulary-list.json';
-    link.click();
-    URL.revokeObjectURL(url);
+    const map = new Map(APP.words.map(i => [normalizeWord(i.word), i]));
+    let added = 0;
+    words.forEach(({ word, meaning, example }) => {
+      if (!map.has(normalizeWord(word))) {
+        APP.words.unshift({
+          id: Date.now() + Math.random(), word, meaning, example,
+          addedAt: new Date().toLocaleDateString('zh-CN')
+        });
+        map.set(normalizeWord(word), true);
+        added++;
+      }
+    });
+    saveWords();
+    renderWordList();
+    renderStudyCard();
+    toast('📄 从PDF导入 ' + added + ' 个新单词（共 ' + words.length + ' 条）', 'success');
+    switchSection('words');
+  } catch (err) {
+    alert('PDF解析失败：' + err.message);
+    toast('❌ PDF解析失败', 'error');
+  } finally { e.target.value = ''; }
 }
 
-function handleImportClick() {
-    document.getElementById('importFile').click();
+function extractWordsFromText(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const results = [];
+  for (const line of lines) {
+    const m = line.match(/^([a-zA-Z][a-zA-Z\-']{1,})(?:\s*[\t\s]+|\s+[-—]\s+|\s*\|\s*)(.+)$/);
+    if (!m) continue;
+    const word = m[1].trim();
+    let rest = m[2].trim();
+    const parts = rest.split(/[。.!!?！？]/);
+    const meaningPart = parts[0].trim();
+    const example = parts.slice(1).join('. ').trim();
+    const m2 = meaningPart.match(/^([^a-zA-Z]{1,50})(.*)$/);
+    let meaning = meaningPart;
+    let tail = '';
+    if (m2 && /[\u4e00-\u9fa5]/.test(m2[1])) {
+      meaning = m2[1].trim();
+      tail = m2[2].trim();
+    }
+    if (!meaning || !/[\u4e00-\u9fa5]/.test(meaning)) continue;
+    results.push({ word, meaning: meaning.replace(/\s+/g, ' '), example: example || tail || '' });
+    if (results.length >= 300) break;
+  }
+  return results;
 }
 
-function importFromJSON(event) {
-    const file = event.target.files?.[0];
-    if (!file) {
-        return;
-    }
+function renderStudyCard() {
+  const card = $('studyCard');
+  const controls = $('studyControls');
+  const quizInput = $('quizInput');
+  const quizResult = $('quizResult');
+  quizInput.value = '';
+  quizResult.textContent = '';
+  quizResult.className = 'quiz-result';
 
-    const reader = new FileReader();
-    reader.onload = function loadJson() {
-        try {
-            const data = JSON.parse(reader.result);
-            if (!Array.isArray(data)) {
-                throw new Error('JSON 格式不正确');
-            }
+  if (APP.words.length === 0) {
+    card.classList.remove('revealed');
+    card.innerHTML = '<div class="empty-state"><div>🎯</div><p>添加单词后可在这里背诵和测验</p></div>';
+    controls.style.display = 'none';
+    return;
+  }
+  if (APP.studyIndex >= APP.words.length) APP.studyIndex = 0;
+  controls.style.display = 'block';
+  const w = APP.words[APP.studyIndex];
+  card.classList.remove('revealed');
+  card.innerHTML = `
+    <div class="study-word">${escapeHtml(w.word)}</div>
+    <div class="study-meaning">${escapeHtml(w.meaning)}</div>
+    ${w.example ? '<div class="study-example">' + escapeHtml(w.example) + '</div>' : ''}
+  `;
+}
 
-            const sanitizedWords = data
-                .filter(item => item && typeof item === 'object')
-                .map((item, index) => ({
-                    id: Date.now() + index,
-                    word: String(item.word || '').trim(),
-                    meaning: String(item.meaning || '').trim(),
-                    example: String(item.example || '').trim(),
-                    addedAt: item.addedAt || new Date().toLocaleDateString('zh-CN')
-                }))
-                .filter(item => item.word && item.meaning);
+function revealMeaning() { $('studyCard').classList.add('revealed'); }
 
-            if (sanitizedWords.length === 0) {
-                throw new Error('没有可导入的单词');
-            }
+function nextWord() {
+  if (APP.words.length === 0) return;
+  APP.studyIndex = (APP.studyIndex + 1) % APP.words.length;
+  renderStudyCard();
+}
 
-            const existingMap = new Map(words.map(item => [normalizeWord(item.word), item]));
-            sanitizedWords.forEach(item => {
-                existingMap.set(normalizeWord(item.word), {
-                    ...item,
-                    id: existingMap.get(normalizeWord(item.word))?.id || item.id
-                });
-            });
+function randomWord() {
+  if (APP.words.length === 0) return;
+  APP.studyIndex = Math.floor(Math.random() * APP.words.length);
+  renderStudyCard();
+}
 
-            words = Array.from(existingMap.values()).sort((a, b) => b.id - a.id);
-            saveWords();
-            renderWordList();
-            renderStudyCard();
-            showFormTip(`已成功导入 ${sanitizedWords.length} 个单词。`, 'success');
-        } catch (error) {
-            alert(`导入失败：${error.message}`);
-        } finally {
-            event.target.value = '';
-        }
-    };
+function splitMeanings(t) {
+  return String(t || '').replace(/[，,、;；。.!！?？]/g, '/').replace(/\s+/g, '').toLowerCase().split('/').map(s => s.trim()).filter(Boolean);
+}
 
-    reader.readAsText(file, 'utf-8');
+function checkAnswer() {
+  if (APP.words.length === 0) return;
+  const input = $('quizInput').value.trim();
+  const result = $('quizResult');
+  const answer = APP.words[APP.studyIndex].meaning.trim();
+  if (!input) { result.textContent = '请先输入中文释义'; result.className = 'quiz-result wrong'; return; }
+  APP.quizCount++;
+  const aList = splitMeanings(answer);
+  const iList = splitMeanings(input);
+  const ok = iList.some(u => aList.some(a => u === a || a.includes(u) || u.includes(a)));
+  if (ok) {
+    APP.correctCount++;
+    result.textContent = '✅ 回答正确！';
+    result.className = 'quiz-result correct';
+  } else {
+    result.textContent = '❌ 再想想，参考答案：' + answer;
+    result.className = 'quiz-result wrong';
+  }
+  saveStats();
+  revealMeaning();
+  renderWordList();
 }
 
 function getAiBaseUrl() {
-    const value = document.getElementById('aiBaseUrl').value.trim();
-    return (value || DEFAULT_AI_BASE_URL).replace(/\/$/, '');
+  return (($('aiBaseUrl').value || APP.DEFAULT_AI_BASE_URL).trim() || APP.DEFAULT_AI_BASE_URL).replace(/\/$/, '');
+}
+
+function setAiStatus(status, text, hint) {
+  const badge = $('aiStatusBadge');
+  badge.textContent = text;
+  badge.className = 'ai-status-badge ' + status;
+  if (hint) $('aiStatusHint').textContent = hint;
+}
+
+function updateAiConfigInfo(c) {
+  $('aiModelInfo').textContent = c?.model || '-';
+  $('aiQuestionLimit').textContent = c?.questionMaxLength ? c.questionMaxLength + ' 字' : '-';
+  $('aiWordLimit').textContent = c?.maxWordList ? c.maxWordList + ' 个' : '-';
+  if (c?.rateLimit?.maxRequests && c?.rateLimit?.windowMs) {
+    $('aiRateLimitInfo').textContent = c.rateLimit.maxRequests + ' 次 / ' + Math.round(c.rateLimit.windowMs / 1000) + ' 秒';
+  } else {
+    $('aiRateLimitInfo').textContent = '-';
+  }
+}
+
+function resetAiStatus() {
+  APP.aiConfig = null;
+  updateAiConfigInfo(null);
+  setAiStatus('idle', '未检测', '点击检测后会自动读取后端配置。');
 }
 
 async function loadAiConfig() {
-    const baseUrl = getAiBaseUrl();
-    setAiStatus('loading', '检测中', '正在尝试连接 AI 服务并读取配置...');
-
-    try {
-        saveAiBaseUrl();
-        const response = await fetch(`${baseUrl}/api/config`);
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.error || '读取 AI 配置失败。');
-        }
-
-        aiConfig = data;
-        updateAiConfigInfo(data);
-
-        if (Array.isArray(data.modes) && data.modes.length > 0) {
-            syncAiModes(data.modes);
-        }
-
-        setAiStatus('success', '已连接', `已连接到 ${baseUrl}，当前模型：${data.model}`);
-    } catch (error) {
-        aiConfig = null;
-        updateAiConfigInfo(null);
-        let hint = `读取配置失败：${error.message}`;
-        // 给未启动后端的用户更明确的提示
-        if (error.message.includes('fetch') || error.message.includes('连接') || error.message.includes('拒绝') || error.message.includes('超时')) {
-            hint = `连接失败！AI后端服务未启动。\n👉 请先在命令行里进入 vocab-app 目录，运行：node ai-server.js`;
-        }
-        setAiStatus('error', '连接失败', hint);
+  const url = getAiBaseUrl();
+  setAiStatus('loading', '检测中', '正在尝试连接 AI 服务...');
+  try {
+    saveAiBaseUrl();
+    const res = await fetch(url + '/api/config');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '读取AI配置失败');
+    APP.aiConfig = data;
+    updateAiConfigInfo(data);
+    if (Array.isArray(data.modes) && data.modes.length > 0) syncAiModes(data.modes);
+    setAiStatus('success', '已连接', '已连接到 ' + url + '，模型：' + data.model);
+  } catch (err) {
+    APP.aiConfig = null;
+    updateAiConfigInfo(null);
+    let hint = '连接失败：' + err.message;
+    if (/fetch|连接|拒绝|超时/i.test(err.message)) {
+      hint = '❌ AI后端未启动！请在 vocab-app 目录运行: node ai-server.js';
     }
+    setAiStatus('error', '连接失败', hint);
+  }
 }
 
 function syncAiModes(modes) {
-    const select = document.getElementById('aiMode');
-    const currentValue = select.value;
-    const labels = {
-        answer: '答题解析',
-        explainWord: '单词讲解',
-        makeQuiz: '生成练习',
-        explainMistake: '错题讲解',
-        makeArticle: '生成记忆文章'
-    };
-
-    select.innerHTML = modes
-        .map(mode => `<option value="${mode}">${labels[mode] || mode}</option>`)
-        .join('');
-
-    if (modes.includes(currentValue)) {
-        select.value = currentValue;
-    }
+  const sel = $('aiMode');
+  const cur = sel.value;
+  const labels = {
+    answer: '答题解析', explainWord: '单词讲解', makeQuiz: '生成练习',
+    explainMistake: '错题讲解', makeArticle: '生成记忆文章'
+  };
+  sel.innerHTML = modes.map(m => '<option value="' + m + '">' + (labels[m] || m) + '</option>').join('');
+  if (modes.includes(cur)) sel.value = cur;
 }
 
 async function askAi() {
-    const questionInput = document.getElementById('aiQuestion');
-    const mode = document.getElementById('aiMode').value;
-    const answerBox = document.getElementById('aiAnswer');
-    const question = questionInput.value.trim();
-
-    if (!question) {
-        answerBox.textContent = '请先输入题目、单词或你的疑问。';
-        answerBox.className = 'ai-answer error';
-        return;
+  const q = $('aiQuestion').value.trim();
+  const mode = $('aiMode').value;
+  const box = $('aiAnswer');
+  if (!q) { box.textContent = '请输入问题或单词'; box.className = 'ai-answer error'; return; }
+  if (APP.aiConfig?.questionMaxLength && q.length > APP.aiConfig.questionMaxLength) {
+    box.textContent = '问题过长，服务限制 ' + APP.aiConfig.questionMaxLength + ' 字符';
+    box.className = 'ai-answer error'; return;
+  }
+  const src = mode === 'makeArticle'
+    ? APP.articleWords.map(w => ({ word: w, meaning: '文章专用词', example: '' }))
+    : APP.words;
+  const payloadWords = APP.aiConfig?.maxWordList ? src.slice(0, APP.aiConfig.maxWordList) : src;
+  box.textContent = 'AI 正在思考...';
+  box.className = 'ai-answer loading';
+  try {
+    saveAiBaseUrl();
+    const res = await fetch(getAiBaseUrl() + '/api/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, mode, wordList: payloadWords })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '请求失败');
+    const rawHtml = renderMarkdown(data.answer);
+    const pages = splitHtmlIntoPages(rawHtml);
+    APP.aiPagination = {
+      rawHtml,
+      pages,
+      currentPage: 1,
+      totalPages: pages.length
+    };
+    renderAiAnswerPage();
+    setAiStatus('success', '已连接', 'AI 请求成功');
+  } catch (err) {
+    let hint = 'AI请求失败：' + err.message;
+    if (/fetch|连接|拒绝|超时/i.test(err.message)) {
+      hint = '❌ AI后端未启动！请先启动后端再试';
+    } else if (/AI_API_KEY/i.test(err.message)) {
+      hint = '⚠️ ' + err.message + '\n👉 请在 PowerShell 设置 API_KEY 后启动后端';
     }
-
-    if (aiConfig?.questionMaxLength && question.length > aiConfig.questionMaxLength) {
-        answerBox.textContent = `问题过长，当前服务限制为 ${aiConfig.questionMaxLength} 个字符。`;
-        answerBox.className = 'ai-answer error';
-        return;
-    }
-
-    const payloadWordsSource = mode === 'makeArticle'
-        ? articleWords.map(word => ({ word, meaning: '文章专用词', example: '' }))
-        : words;
-    const payloadWords = aiConfig?.maxWordList ? payloadWordsSource.slice(0, aiConfig.maxWordList) : payloadWordsSource;
-
-    answerBox.textContent = 'AI 正在生成答案...';
-    answerBox.className = 'ai-answer loading';
-
-    try {
-        saveAiBaseUrl();
-        const response = await fetch(`${getAiBaseUrl()}/api/answer`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                question,
-                mode,
-                wordList: payloadWords
-            })
-        });
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.error || 'AI 服务请求失败。');
-        }
-
-        answerBox.innerHTML = renderMarkdown(data.answer);
-        answerBox.className = 'ai-answer markdown-body';
-        setAiStatus('success', '已连接', '请求成功，AI 服务响应正常。');
-    } catch (error) {
-        let hint = `AI请求失败：${error.message}`;
-        if (error.message.includes('fetch') || error.message.includes('连接') || error.message.includes('拒绝') || error.message.includes('超时') || error.message.includes('Failed to fetch')) {
-            hint = `❌ AI后端未连接！\n👉 请先启动后端：在vocab-app目录运行 node ai-server.js\n👉 启动后再点「检测AI服务」按钮`;
-        } else if (error.message.includes('未配置AI_API_KEY')) {
-            hint = `⚠️ ${error.message}\n👉 PowerShell配置：$env:AI_API_KEY="你的AI密钥" （如DeepSeek密钥）`;
-        }
-        answerBox.textContent = hint;
-        answerBox.className = 'ai-answer error';
-        setAiStatus('error', '连接失败', hint);
-    }
+    box.textContent = hint;
+    box.className = 'ai-answer error';
+    APP.aiPagination = { rawHtml: '', pages: [], currentPage: 1, totalPages: 0 };
+    setAiStatus('error', '连接失败', hint);
+  }
 }
 
-async function generateArticle() {
-    const output = document.getElementById('articleOutput');
-    const customPrompt = document.getElementById('articlePrompt').value.trim();
-    const level = document.getElementById('articleLevel').value;
-    const length = document.getElementById('articleLength').value;
+function splitHtmlIntoPages(html, maxChars) {
+  maxChars = maxChars || 600;
+  if (!html) return [];
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="__ai_root__">' + html + '</div>', 'text/html');
+  const root = doc.getElementById('__ai_root__');
+  const children = Array.from(root.children);
+  if (children.length === 0) return [html];
 
-    if (articleWords.length === 0) {
-        output.textContent = '请先添加一些文章专用单词，再生成记忆文章。';
-        output.className = 'article-output error';
-        showArticleWordsTip('请先添加文章专用单词。', 'error');
-        return;
+  var hasH2 = children.some(function(c) { return c.tagName === 'H2'; });
+  var hasH3 = !hasH2 && children.some(function(c) { return c.tagName === 'H3'; });
+
+  const pages = [];
+  let current = [];
+  let currentSize = 0;
+  const pushPage = function() {
+    if (current.length) {
+      const container = document.createElement('div');
+      current.forEach(function(el) { container.appendChild(el.cloneNode(true)); });
+      pages.push(container.innerHTML);
+      current = [];
+      currentSize = 0;
     }
-
-    saveArticleSettings();
-
-    const levelText = {
-        easy: '简单，适合初学者',
-        medium: '中等，适合有一定基础的学习者',
-        hard: '较难，适合进阶学习者'
-    }[level] || '中等';
-
-    const lengthText = {
-        short: '120 到 180 词',
-        medium: '220 到 320 词',
-        long: '350 到 500 词'
-    }[length] || '220 到 320 词';
-
-    const question = [
-        '请使用我提供的单词生成一篇适合背单词学习的英语文章。',
-        `文章难度：${levelText}。`,
-        `文章长度：${lengthText}。`,
-        '要求：尽量自然地使用所有给定单词；先输出英文文章，再输出中文梗概，最后列出文中每个目标单词对应的语境提示。',
-        customPrompt ? `额外要求：${customPrompt}` : ''
-    ].filter(Boolean).join('\n');
-
-    output.textContent = 'AI 正在生成记忆文章...';
-    output.className = 'article-output loading';
-
-    try {
-        saveAiBaseUrl();
-        const payloadWords = aiConfig?.maxWordList
-            ? articleWords.slice(0, aiConfig.maxWordList)
-            : articleWords;
-        const response = await fetch(`${getAiBaseUrl()}/api/answer`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                question,
-                mode: 'makeArticle',
-                wordList: payloadWords.map(word => ({
-                    word,
-                    meaning: '文章专用词',
-                    example: ''
-                }))
-            })
-        });
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.error || 'AI 服务请求失败。');
-        }
-
-        output.innerHTML = renderMarkdown(data.answer);
-        output.className = 'article-output markdown-body';
-        setAiStatus('success', '已连接', 'AI 文章生成成功。');
-    } catch (error) {
-        let hint = `AI文章生成失败：${error.message}`;
-        if (error.message.includes('fetch') || error.message.includes('连接') || error.message.includes('拒绝') || error.message.includes('超时') || error.message.includes('Failed to fetch')) {
-            hint = `❌ AI后端未连接！\n👉 请先启动后端：在vocab-app目录运行 node ai-server.js\n👉 启动后再点「生成文章」按钮`;
-        } else if (error.message.includes('未配置AI_API_KEY')) {
-            hint = `⚠️ ${error.message}\n👉 PowerShell配置：$env:AI_API_KEY="你的AI密钥" （如DeepSeek密钥）`;
-        }
-        output.textContent = hint;
-        output.className = 'article-output error';
-        setAiStatus('error', '连接失败', hint);
+  };
+  const addToCurrent = function(el) {
+    const s = (el.textContent || '').length;
+    if (currentSize + s > maxChars && current.length > 0) {
+      pushPage();
     }
+    current.push(el);
+    currentSize += s;
+  };
+
+  if (hasH2) {
+    children.forEach(function(el) {
+      if (el.tagName === 'H2' && current.length) pushPage();
+      current.push(el);
+      currentSize += (el.textContent || '').length;
+      if (currentSize > maxChars * 2 && current.length > 4) {
+        if (el.tagName === 'P' || el.tagName === 'UL' || el.tagName === 'OL') pushPage();
+      }
+    });
+    pushPage();
+  } else if (hasH3) {
+    children.forEach(function(el) {
+      if (el.tagName === 'H3' && current.length) pushPage();
+      addToCurrent(el);
+    });
+    pushPage();
+  } else {
+    children.forEach(function(el) { addToCurrent(el); });
+    pushPage();
+  }
+
+  if (pages.length === 0) return [html];
+  if (pages.length === 1) return [html];
+  return pages;
+}
+
+function renderAiAnswerPage() {
+  var box = $('aiAnswer');
+  var ap = APP.aiPagination;
+  if (!ap.pages || ap.pages.length === 0) {
+    box.innerHTML = '';
+    box.className = 'ai-answer markdown-body';
+    return;
+  }
+  if (ap.totalPages <= 1) {
+    box.innerHTML = ap.pages[0];
+    box.className = 'ai-answer markdown-body';
+    var existing = box.querySelector('.ai-pagination-bar');
+    if (existing) existing.remove();
+    return;
+  }
+  var content = ap.pages[ap.currentPage - 1] || '';
+  box.innerHTML = content;
+  box.className = 'ai-answer markdown-body';
+  var barHtml = renderAiPaginationBar(ap.currentPage, ap.totalPages);
+  var barDiv = document.createElement('div');
+  barDiv.className = 'ai-pagination-bar';
+  barDiv.innerHTML = barHtml;
+  box.appendChild(barDiv);
+}
+
+function renderAiPaginationBar(current, total) {
+  if (total <= 1) return '';
+  var html = '';
+  html += '<button class="page-btn" data-ai-page="' + Math.max(1, current - 1) + '"' + (current <= 1 ? ' disabled' : '') + '>‹ 上一页</button>';
+  html += '<span class="page-info">第 ' + current + ' / ' + total + ' 页</span>';
+  html += '<button class="page-btn" data-ai-page="' + Math.min(total, current + 1) + '"' + (current >= total ? ' disabled' : '') + '>下一页 ›</button>';
+  var startPage = Math.max(1, current - 2);
+  var endPage = Math.min(total, startPage + 4);
+  startPage = Math.max(1, endPage - 4);
+  html += '<span class="page-nums">';
+  if (startPage > 1) {
+    html += '<button class="page-btn" data-ai-page="1">1</button>';
+    if (startPage > 2) html += '<span class="page-ellipsis">...</span>';
+  }
+  for (var i = startPage; i <= endPage; i++) {
+    html += '<button class="page-btn' + (i === current ? ' active' : '') + '" data-ai-page="' + i + '">' + i + '</button>';
+  }
+  if (endPage < total) {
+    if (endPage < total - 1) html += '<span class="page-ellipsis">...</span>';
+    html += '<button class="page-btn" data-ai-page="' + total + '">' + total + '</button>';
+  }
+  html += '</span>';
+  return html;
+}
+
+function aiGotoPage(n) {
+  var ap = APP.aiPagination;
+  if (n < 1 || n > ap.totalPages || !ap.pages.length) return;
+  ap.currentPage = n;
+  renderAiAnswerPage();
+  var box = $('aiAnswer');
+  if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function useCurrentWordForAi() {
-    const answerBox = document.getElementById('aiAnswer');
-    if (words.length === 0) {
-        answerBox.textContent = '当前还没有单词，请先添加单词。';
-        answerBox.className = 'ai-answer error';
-        return;
-    }
-
-    const current = words[studyIndex];
-    document.getElementById('aiMode').value = 'explainWord';
-    document.getElementById('aiQuestion').value = `${current.word}\n中文释义：${current.meaning}${current.example ? `\n例句：${current.example}` : ''}`;
-    answerBox.textContent = '已填入当前单词，点击“AI 生成答案”即可讲解。';
-    answerBox.className = 'ai-answer markdown-body';
+  if (APP.words.length === 0) { $('aiAnswer').textContent = '当前还没有单词'; $('aiAnswer').className = 'ai-answer error'; return; }
+  const w = APP.words[APP.studyIndex];
+  $('aiMode').value = 'explainWord';
+  $('aiQuestion').value = w.word + '\n中文释义：' + w.meaning + (w.example ? '\n例句：' + w.example : '');
+  $('aiAnswer').textContent = '已填入当前单词，点击"AI 生成答案"即可讲解。';
+  $('aiAnswer').className = 'ai-answer markdown-body';
+  switchSection('ai');
 }
 
-document.getElementById('wordForm').addEventListener('submit', addWord);
-document.getElementById('editForm').addEventListener('submit', saveEdit);
-document.getElementById('revealBtn').addEventListener('click', revealMeaning);
-document.getElementById('nextBtn').addEventListener('click', nextWord);
-document.getElementById('randomBtn').addEventListener('click', randomWord);
-document.getElementById('checkBtn').addEventListener('click', checkAnswer);
-document.getElementById('askAiBtn').addEventListener('click', askAi);
-document.getElementById('useCurrentWordBtn').addEventListener('click', useCurrentWordForAi);
-document.getElementById('checkAiBtn').addEventListener('click', loadAiConfig);
-document.getElementById('clearBtn').addEventListener('click', clearAllWords);
-document.getElementById('exportPdfBtn').addEventListener('click', exportToPDF);
-document.getElementById('exportJsonBtn').addEventListener('click', exportToJSON);
-document.getElementById('importJsonBtn').addEventListener('click', handleImportClick);
-document.getElementById('importFile').addEventListener('change', importFromJSON);
-document.getElementById('addArticleWordBtn').addEventListener('click', addArticleWord);
-document.getElementById('fillArticleWordsBtn').addEventListener('click', fillArticleWordsFromExisting);
-document.getElementById('generateArticleBtn').addEventListener('click', generateArticle);
-document.getElementById('articleWordInput').addEventListener('keydown', event => {
-    if (event.key === 'Enter') {
-        event.preventDefault();
-        addArticleWord();
-    }
-});
-document.getElementById('articleLevel').addEventListener('change', saveArticleSettings);
-document.getElementById('articleLength').addEventListener('change', saveArticleSettings);
-document.getElementById('articlePrompt').addEventListener('change', saveArticleSettings);
-document.getElementById('searchInput').addEventListener('input', event => {
-    currentFilter = event.target.value;
-    renderWordList();
-});
-document.getElementById('sortSelect').addEventListener('change', event => {
-    currentSort = event.target.value;
-    renderWordList();
-});
-document.getElementById('quizInput').addEventListener('keydown', event => {
-    if (event.key === 'Enter') {
-        event.preventDefault();
-        checkAnswer();
-    }
-});
-document.getElementById('closeModalBtn').addEventListener('click', closeEditModal);
-document.getElementById('aiBaseUrl').addEventListener('change', () => {
+function renderArticleWords() {
+  const box = $('articleWordList');
+  if (APP.articleWords.length === 0) {
+    box.innerHTML = '<div class="empty-state compact-empty-state"><div>🪄</div><p>暂未添加文章专用单词</p></div>';
+    return;
+  }
+  box.innerHTML = APP.articleWords.map((w, i) => `
+    <div class="article-word-item">
+      <input type="text" class="article-word-input" value="${escapeHtml(w)}" data-idx="${i}" />
+      <button class="action-btn delete" type="button" data-del="${i}">删除</button>
+    </div>
+  `).join('');
+  box.querySelectorAll('.article-word-input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const idx = parseInt(inp.dataset.idx, 10);
+      APP.articleWords[idx] = inp.value.trim();
+      APP.articleWords = APP.articleWords.filter(Boolean);
+      saveArticleWords();
+    });
+  });
+  box.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      APP.articleWords.splice(parseInt(btn.dataset.del, 10), 1);
+      saveArticleWords();
+      renderArticleWords();
+    });
+  });
+}
+
+function addArticleWord() {
+  const v = $('articleWordInput').value.trim();
+  if (!v) { showArticleTip('请输入文章单词', 'error'); return; }
+  if (APP.articleWords.some(x => normalizeWord(x) === normalizeWord(v))) {
+    showArticleTip('已存在：' + v, 'error'); return;
+  }
+  APP.articleWords.push(v);
+  saveArticleWords();
+  renderArticleWords();
+  $('articleWordInput').value = '';
+  showArticleTip('已添加：' + v, 'success');
+}
+
+function showArticleTip(msg, type) { showTip(msg, type, 'articleWordsTip'); }
+
+function fillArticleWordsFromExisting() {
+  if (APP.words.length === 0) { showArticleTip('现有单词为空', 'error'); return; }
+  if (APP.articleWords.length > 0 && !confirm('文章词库已有单词，是否覆盖？')) return;
+  APP.articleWords = [];
+  APP.words.filter(w => /^[a-zA-Z]/.test(w.word)).slice(0, 50).forEach(w => APP.articleWords.push(w.word));
+  saveArticleWords();
+  renderArticleWords();
+  showArticleTip('已把现有单词复制到文章词库', 'success');
+}
+
+async function generateArticle() {
+  const out = $('articleOutput');
+  if (APP.articleWords.length === 0) {
+    out.textContent = '请先添加文章专用单词'; out.className = 'article-output error';
+    showArticleTip('请先添加文章单词', 'error'); return;
+  }
+  saveArticleSettings();
+  const levelText = { easy: '简单', medium: '中等', hard: '较难' }[$('articleLevel').value] || '中等';
+  const lengthText = { short: '短文', medium: '中篇', long: '长文' }[$('articleLength').value] || '中篇';
+  const customPrompt = $('articlePrompt').value.trim();
+  const q = [
+    '请使用我提供的单词生成一篇适合背单词学习的英语文章。',
+    '文章难度：' + levelText + '，文章长度：' + lengthText + '。',
+    '要求：尽量自然地使用所有给定单词；先输出英文文章，再输出中文梗概，最后列出文中每个目标单词对应的语境提示。',
+    customPrompt ? '额外要求：' + customPrompt : ''
+  ].filter(Boolean).join('\n');
+  out.textContent = 'AI 正在生成记忆文章...';
+  out.className = 'article-output loading';
+  try {
     saveAiBaseUrl();
-    resetAiStatus();
-});
-document.addEventListener('keydown', event => {
-    if (event.key === 'Escape') {
-        closeEditModal();
-    }
-});
+    const words = APP.aiConfig?.maxWordList ? APP.articleWords.slice(0, APP.aiConfig.maxWordList) : APP.articleWords;
+    const res = await fetch(getAiBaseUrl() + '/api/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question: q, mode: 'makeArticle',
+        wordList: words.map(w => ({ word: w, meaning: '文章专用词', example: '' }))
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'AI 服务请求失败');
+    out.innerHTML = renderMarkdown(data.answer);
+    out.className = 'article-output markdown-body';
+    setAiStatus('success', '已连接', '文章生成成功');
+  } catch (err) {
+    let hint = '文章生成失败：' + err.message;
+    if (/fetch|连接|拒绝|超时/i.test(err.message)) hint = '❌ AI后端未启动！请先启动后端再试';
+    out.textContent = hint;
+    out.className = 'article-output error';
+    setAiStatus('error', '连接失败', hint);
+  }
+}
 
-window.onclick = function(event) {
-    const modal = document.getElementById('editModal');
-    if (event.target === modal) {
-        closeEditModal();
-    }
-};
+function initNav() {
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const section = btn.dataset.section;
+      if (section) switchSection(section);
+    });
+  });
+}
 
-window.updateArticleWord = updateArticleWord;
-window.removeArticleWord = removeArticleWord;
+function initEvents() {
+  $('wordForm').addEventListener('submit', addWord);
+  $('gotoWordsBtn').addEventListener('click', () => switchSection('words'));
+  $('editForm').addEventListener('submit', saveEdit);
+  $('closeModalBtn').addEventListener('click', closeEditModal);
+  $('revealBtn').addEventListener('click', revealMeaning);
+  $('nextBtn').addEventListener('click', nextWord);
+  $('randomBtn').addEventListener('click', randomWord);
+  $('checkBtn').addEventListener('click', checkAnswer);
+  $('quizInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); checkAnswer(); } });
+  $('askAiBtn').addEventListener('click', askAi);
+  $('useCurrentWordBtn').addEventListener('click', useCurrentWordForAi);
+  $('checkAiBtn').addEventListener('click', loadAiConfig);
+  $('aiBaseUrl').addEventListener('change', () => { saveAiBaseUrl(); resetAiStatus(); });
+  $('clearBtn').addEventListener('click', clearAllWords);
+  $('exportJsonBtn').addEventListener('click', exportToJSON);
+  $('importJsonBtn').addEventListener('click', handleImportClick);
+  $('importFile').addEventListener('change', importFromJSON);
+  $('exportPdfBtn').addEventListener('click', exportToPDF);
+  $('parsePdfBtn').addEventListener('click', parsePDFFile);
+  $('pdfFileInput').addEventListener('change', handlePDFFile);
+  $('addArticleWordBtn').addEventListener('click', addArticleWord);
+  $('fillArticleWordsBtn').addEventListener('click', fillArticleWordsFromExisting);
+  $('generateArticleBtn').addEventListener('click', generateArticle);
+  $('articleWordInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addArticleWord(); } });
+  $('articleLevel').addEventListener('change', saveArticleSettings);
+  $('articleLength').addEventListener('change', saveArticleSettings);
+  $('articlePrompt').addEventListener('change', saveArticleSettings);
+  $('searchInput').addEventListener('input', e => { APP.currentFilter = e.target.value; APP.currentPage = 1; renderWordList(); });
+  $('sortSelect').addEventListener('change', e => { APP.currentSort = e.target.value; APP.currentPage = 1; renderWordList(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeEditModal(); });
+  window.onclick = e => { if (e.target === $('editModal')) closeEditModal(); };
+
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey) return;
+    if (['Section', 'Input', 'Textarea', 'Select'].includes(e.target.tagName)) return;
+    const map = { '1': 'home', '2': 'study', '3': 'ai', '4': 'article', '5': 'words' };
+    if (map[e.key]) switchSection(map[e.key]);
+  });
+
+  document.addEventListener('click', e => {
+    var t = e.target.closest('[data-ai-page]');
+    if (t) {
+      e.preventDefault();
+      if (t.disabled) return;
+      aiGotoPage(parseInt(t.dataset.aiPage, 10));
+    }
+  });
+}
+
 window.openEditModal = openEditModal;
 window.deleteWord = deleteWord;
 
-loadWords();
+document.addEventListener('DOMContentLoaded', () => {
+  initNav();
+  initEvents();
+  loadWords();
+});
+// ---------- TTS MODULE ----------
+const TTS = {
+  supported: typeof window !== 'undefined' && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window,
+  voices: [],
+  initialized: false,
+  _pending: false,
+  init() {
+    if (!this.supported || this.initialized || this._pending) return;
+    this._pending = true;
+    const self = this;
+    const tryLoad = () => {
+      const raw = typeof window !== 'undefined' ? window.speechSynthesis.getVoices() : [];
+      if (!raw || raw.length === 0) { self._pending = false; return false; }
+      self.voices = raw.filter(v => v.lang && /^en/i.test(v.lang));
+      self.initialized = self.voices.length > 0;
+      self._pending = false;
+      return self.initialized;
+    };
+    const ok = tryLoad();
+    if (!ok && typeof window !== 'undefined') {
+      try { window.speechSynthesis.onvoiceschanged = tryLoad; } catch(e){}
+      setTimeout(tryLoad, 400);
+    }
+  },
+  pickVoice() {
+    if (!this.supported) return null;
+    if (!this.initialized) this.init();
+    if (this.voices.length === 0) return null;
+    const prio = ['Google US English', 'en-US', 'en_US', 'en-GB', 'en_GB', 'en-AU'];
+    for (const p of prio) {
+      const v = this.voices.find(v => v.name && v.name.indexOf(p) !== -1);
+      if (v) return v;
+    }
+    for (const p of prio) {
+      const v = this.voices.find(v => v.lang === p || (v.lang && v.lang.replace('_','-') === p));
+      if (v) return v;
+    }
+    return this.voices[0];
+  },
+  speak(text, opts) {
+    opts = opts || {};
+    if (!this.supported || !text) return;
+    if (!this.initialized) this.init();
+    try {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        u.rate = opts.rate != null ? opts.rate : 0.85;
+        u.pitch = opts.pitch != null ? opts.pitch : 1.0;
+        u.volume = opts.volume != null ? opts.volume : 1.0;
+        u.lang = opts.lang || 'en-US';
+        const v = this.pickVoice();
+        if (v) { try { u.voice = v; } catch(e){} }
+        window.speechSynthesis.speak(u);
+      }
+    } catch(e){}
+  },
+  speakWord(w) { if (!w) return; this.speak(String(w).trim(), { rate: 0.85 }); },
+  speakSentence(s) { if (!s) return; this.speak(String(s).trim(), { rate: 0.78 }); }
+};
+
+function __tts_makeSpeakBtn(word) {
+  if (!TTS.supported) return null;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'speak-btn';
+  b.title = 'Click to speak';
+  b.setAttribute('aria-label', 'Speak');
+  b.innerHTML = '<span class="speak-ico">🔊</span>';
+  b.addEventListener('click', function(ev) {
+    ev.stopPropagation();
+    ev.preventDefault();
+    TTS.speakWord(word);
+  });
+  return b;
+}
+
+function __tts_makeSentenceBtn(sentence) {
+  if (!TTS.supported) return null;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'speak-btn tiny';
+  b.title = 'Read aloud';
+  b.innerHTML = '<span class="speak-ico">🔊</span>';
+  b.addEventListener('click', function(ev) {
+    ev.stopPropagation();
+    ev.preventDefault();
+    TTS.speakSentence(sentence);
+  });
+  return b;
+}
+
+function __tts_decorateList() {
+  if (!TTS.supported) return;
+  const items = document.querySelectorAll('#wordList .word');
+  for (let i = 0; i < items.length; i++) {
+    const el = items[i];
+    if (el.dataset.tts === '1') continue;
+    const word = el.textContent.trim();
+    const btn = __tts_makeSpeakBtn(word);
+    if (btn) { el.appendChild(btn); el.dataset.tts = '1'; }
+  }
+}
+
+function __tts_decorateStudy() {
+  if (!TTS.supported) return;
+  const card = document.getElementById('studyCard');
+  if (!card) return;
+  const wEl = card.querySelector('.study-word');
+  if (wEl && !wEl.dataset.tts) {
+    const btn = __tts_makeSpeakBtn(wEl.textContent.trim());
+    if (btn) { wEl.appendChild(btn); wEl.dataset.tts = '1'; }
+  }
+  const exEl = card.querySelector('.study-example');
+  if (exEl && !exEl.dataset.tts && exEl.textContent.trim()) {
+    const btn = __tts_makeSentenceBtn(exEl.textContent.trim());
+    if (btn) { exEl.appendChild(btn); exEl.dataset.tts = '1'; }
+  }
+}
+
+(function wrapRender() {
+  if (typeof renderWordList === 'function') {
+    const _wl = renderWordList;
+    renderWordList = function() { _wl.apply(null, arguments); setTimeout(__tts_decorateList, 0); };
+  }
+  if (typeof renderStudyCard === 'function') {
+    const _sc = renderStudyCard;
+    renderStudyCard = function() { _sc.apply(null, arguments); setTimeout(__tts_decorateStudy, 0); };
+  }
+})();
+
+APP.tts = TTS;
+if (typeof window !== 'undefined') { window.APP = APP; window.TTS = TTS; }
+try { TTS.init(); } catch(e){}
+function renderPaginationBar(total, page, totalPages, hide) {
+  const bar = paginationBar;
+  if (!bar) return;
+  if (hide || total <= APP.pageSize) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  bar.style.display = 'flex';
+
+  const ps = APP.pageSize;
+  const psOptions = APP.pageSizeOptions || [10, 20, 50, 100];
+
+  let html = '<div class="page-info">共 ' + total + ' 条 · 第 ' + page + ' / ' + totalPages + ' 页</div>';
+
+  html += '<button class="page-btn" title="第一页"';
+  if (page <= 1) html += ' disabled'; else html += ' onclick="goPage(1)"';
+  html += '>&larr;&larr;</button>';
+
+  html += '<button class="page-btn" title="上一页"';
+  if (page <= 1) html += ' disabled'; else html += ' onclick="goPage(' + (page - 1) + ')"';
+  html += '>&larr;</button>';
+
+  const numBtns = [];
+  const push = (n) => { if (numBtns.indexOf(n) === -1) numBtns.push(n); };
+  push(1); push(totalPages);
+  for (let d = 1; d <= 2; d++) { if (page - d >= 1) push(page - d); }
+  for (let d = 1; d <= 2; d++) { if (page + d <= totalPages) push(page + d); }
+  numBtns.sort((a, b) => a - b);
+  let last = 0;
+  for (const n of numBtns) {
+    if (n - last > 1) html += '<span class="page-dots">...</span>';
+    const active = n === page ? ' active' : '';
+    html += '<button class="page-btn' + active + '" onclick="goPage(' + n + ')">' + n + '</button>';
+    last = n;
+  }
+
+  html += '<button class="page-btn" title="下一页"';
+  if (page >= totalPages) html += ' disabled'; else html += ' onclick="goPage(' + (page + 1) + ')"';
+  html += '>&rarr;</button>';
+
+  html += '<button class="page-btn" title="最后一页"';
+  if (page >= totalPages) html += ' disabled'; else html += ' onclick="goPage(' + totalPages + ')"';
+  html += '>&rarr;&rarr;</button>';
+
+  html += '<span class="page-size-wrap">每页<select class="page-size-select" id="pageSizeSelect">';
+  for (const sz of psOptions) {
+    html += '<option value="' + sz + '"' + (sz === ps ? ' selected' : '') + '>' + sz + '</option>';
+  }
+  html += '</select>条</span>';
+
+  bar.innerHTML = html;
+  const sel = bar.querySelector('#pageSizeSelect') || bar.querySelector('.page-size-select');
+  if (sel) {
+    sel.addEventListener('change', function() { changePageSize(parseInt(this.value, 10)); });
+  }
+}
+
+function goPage(n) {
+  const list = getFilteredWords();
+  const total = list.length;
+  const ps = APP.pageSize || 20;
+  const totalPages = Math.max(1, Math.ceil(total / ps));
+  n = Math.max(1, Math.min(totalPages, parseInt(n, 10) || 1));
+  APP.currentPage = n;
+  renderWordList();
+}
+
+function changePageSize(n) {
+  n = [10, 20, 50, 100].indexOf(n) >= 0 ? n : 20;
+  APP.pageSize = n;
+  try { localStorage.setItem(APP.PAGESIZE_KEY, String(n)); } catch(e) {}
+  APP.currentPage = 1;
+  renderWordList();
+}

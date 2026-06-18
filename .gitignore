@@ -8,3 +8,5 @@ Thumbs.db
 .vscode/
 .idea/
 *.bak
+_chk.js
+*.pdf
