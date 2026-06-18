@@ -1,0 +1,10 @@
+ai-server.js
+.env
+.env.local
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.bak

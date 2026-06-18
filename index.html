@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>背单词软件</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <script>
+        marked.setOptions({
+            gfm: true,
+            breaks: true,
+            headerIds: true,
+            mangle: false
+        });
+        function renderMarkdown(md) {
+            if (!md) return '';
+            try {
+                return DOMPurify.sanitize(marked.parse(String(md)));
+            } catch (e) {
+                return DOMPurify.sanitize(String(md).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])));
+            }
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>📚 背单词软件</h1>
+
+        <div class="card">
+            <div class="stats">
+                <div class="stats-item">
+                    <div class="stats-value" id="wordCount">0</div>
+                    <div class="stats-label">单词数量</div>
+                </div>
+                <div class="stats-item">
+                    <div class="stats-value" id="quizCount">0</div>
+                    <div class="stats-label">测验次数</div>
+                </div>
+                <div class="stats-item">
+                    <div class="stats-value" id="correctRate">0%</div>
+                    <div class="stats-label">正确率</div>
+                </div>
+            </div>
+
+            <form id="wordForm">
+                <div class="form-group">
+                    <label for="word">英文单词</label>
+                    <input type="text" id="word" placeholder="请输入英文单词" required>
+                </div>
+                <div class="form-group">
+                    <label for="meaning">中文释义</label>
+                    <input type="text" id="meaning" placeholder="请输入中文释义，多个释义可用 / 分隔" required>
+                </div>
+                <div class="form-group">
+                    <label for="example">例句（可选）</label>
+                    <textarea id="example" placeholder="请输入例句"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">添加单词</button>
+                <p class="form-tip" id="formTip">支持本地保存、搜索、JSON 导入导出和 AI 学习辅助。</p>
+            </form>
+        </div>
+
+        <div class="card">
+            <div class="toolbar">
+                <h2>背诵 / 测验模式</h2>
+                <button class="btn btn-warning" id="randomBtn">随机抽词</button>
+            </div>
+            <div class="study-panel">
+                <div class="study-card" id="studyCard"></div>
+                <div id="studyControls">
+                    <div class="form-group">
+                        <label for="quizInput">请输入这个单词的中文释义</label>
+                        <input type="text" id="quizInput" placeholder="输入答案后按 Enter 或点击检查">
+                    </div>
+                    <p class="quiz-result" id="quizResult"></p>
+                    <button class="btn btn-primary" id="checkBtn">检查答案</button>
+                    <button class="btn btn-success" id="revealBtn">显示释义</button>
+                    <button class="btn btn-primary" id="nextBtn">下一个</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="toolbar">
+                <h2>AI 答题助手</h2>
+                <select id="aiMode" class="mode-select">
+                    <option value="answer">答题解析</option>
+                    <option value="explainWord">单词讲解</option>
+                    <option value="makeQuiz">生成练习</option>
+                    <option value="explainMistake">错题讲解</option>
+                    <option value="makeArticle">生成记忆文章</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="aiBaseUrl">AI 服务地址</label>
+                <input type="text" id="aiBaseUrl" placeholder="默认：http://localhost:3000">
+            </div>
+            <div class="ai-status-panel">
+                <div class="ai-status-row">
+                    <span class="ai-status-label">连接状态</span>
+                    <span class="ai-status-badge idle" id="aiStatusBadge">未检测</span>
+                </div>
+                <div class="ai-status-grid">
+                    <div class="ai-status-item">
+                        <span class="ai-status-label">当前模型</span>
+                        <span class="ai-status-value" id="aiModelInfo">-</span>
+                    </div>
+                    <div class="ai-status-item">
+                        <span class="ai-status-label">问题上限</span>
+                        <span class="ai-status-value" id="aiQuestionLimit">-</span>
+                    </div>
+                    <div class="ai-status-item">
+                        <span class="ai-status-label">单词上限</span>
+                        <span class="ai-status-value" id="aiWordLimit">-</span>
+                    </div>
+                    <div class="ai-status-item">
+                        <span class="ai-status-label">限流策略</span>
+                        <span class="ai-status-value" id="aiRateLimitInfo">-</span>
+                    </div>
+                </div>
+                <div class="ai-status-actions">
+                    <button class="btn btn-secondary" id="checkAiBtn" type="button">检测 AI 服务</button>
+                    <span class="ai-status-hint" id="aiStatusHint">点击检测后会自动读取后端配置。</span>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="aiQuestion">输入题目、单词或你的疑问</label>
+                <textarea id="aiQuestion" placeholder="例如：abandon 这个词怎么记？或者：请根据我的单词本出 5 道选择题"></textarea>
+            </div>
+            <button class="btn btn-primary" id="askAiBtn">AI 生成答案</button>
+            <button class="btn btn-success" id="useCurrentWordBtn">使用当前单词</button>
+            <div class="ai-answer" id="aiAnswer">AI 的回答会显示在这里。</div>
+        </div>
+
+        <div class="card">
+            <div class="toolbar">
+                <h2>AI 单词记忆文章</h2>
+                <div class="toolbar-actions">
+                    <button class="btn btn-secondary" id="fillArticleWordsBtn" type="button">从现有单词导入</button>
+                    <button class="btn btn-success" id="generateArticleBtn" type="button">生成文章</button>
+                </div>
+            </div>
+            <p class="section-tip">这里的单词列表独立保存，仅用于生成文章，不会修改下面现有单词列表，也不会影响单词数量统计。</p>
+            <div class="article-config-grid">
+                <div class="form-group compact-field">
+                    <label for="articleLevel">文章难度</label>
+                    <select id="articleLevel" class="mode-select">
+                        <option value="easy">简单</option>
+                        <option value="medium">中等</option>
+                        <option value="hard">较难</option>
+                    </select>
+                </div>
+                <div class="form-group compact-field">
+                    <label for="articleLength">文章长度</label>
+                    <select id="articleLength" class="mode-select">
+                        <option value="short">短文</option>
+                        <option value="medium">中篇</option>
+                        <option value="long">长文</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="articlePrompt">文章要求（可选）</label>
+                <textarea id="articlePrompt" placeholder="例如：请生成校园生活主题的小故事，并尽量自然地使用这些单词。"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="articleWordInput">添加文章专用单词</label>
+                <div class="inline-input-group">
+                    <input type="text" id="articleWordInput" placeholder="输入英文单词后点击添加">
+                    <button class="btn btn-primary" id="addArticleWordBtn" type="button">添加到文章词库</button>
+                </div>
+                <p class="form-tip" id="articleWordsTip">你可以自由增删改这里的单词，它们只用于 AI 生成文章。</p>
+            </div>
+            <div class="article-word-list" id="articleWordList">
+                <div class="empty-state compact-empty-state">
+                    <div>🪄</div>
+                    <p>暂未添加文章专用单词</p>
+                </div>
+            </div>
+            <div class="article-output" id="articleOutput">生成的英语文章、中文梗概与重点单词提示会显示在这里。</div>
+        </div>
+
+        <div class="card">
+            <div class="toolbar">
+                <h2>单词列表</h2>
+                <div class="toolbar-actions">
+                    <button class="btn btn-success" id="exportJsonBtn">导出JSON</button>
+                    <button class="btn btn-primary" id="importJsonBtn">导入JSON</button>
+                    <button class="btn btn-success" id="exportPdfBtn">导出PDF</button>
+                    <button class="btn btn-danger" id="clearBtn" style="display: none;">清空全部</button>
+                </div>
+            </div>
+
+            <div class="list-tools">
+                <div class="form-group compact-field">
+                    <label for="searchInput">搜索单词</label>
+                    <input type="text" id="searchInput" placeholder="按英文、释义或例句搜索">
+                </div>
+                <div class="form-group compact-field">
+                    <label for="sortSelect">排序方式</label>
+                    <select id="sortSelect" class="mode-select">
+                        <option value="newest">最新添加</option>
+                        <option value="oldest">最早添加</option>
+                        <option value="az">英文 A-Z</option>
+                        <option value="za">英文 Z-A</option>
+                    </select>
+                </div>
+            </div>
+
+            <input type="file" id="importFile" accept="application/json" hidden>
+
+            <div class="word-list" id="wordList">
+                <div class="empty-state">
+                    <div>📝</div>
+                    <p>暂无单词，请添加单词开始学习</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="editModal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeModalBtn">&times;</span>
+            <h2>编辑单词</h2>
+            <form id="editForm">
+                <input type="hidden" id="editId">
+                <div class="form-group">
+                    <label for="editWord">英文单词</label>
+                    <input type="text" id="editWord" required>
+                </div>
+                <div class="form-group">
+                    <label for="editMeaning">中文释义</label>
+                    <input type="text" id="editMeaning" required>
+                </div>
+                <div class="form-group">
+                    <label for="editExample">例句</label>
+                    <textarea id="editExample"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">保存修改</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
